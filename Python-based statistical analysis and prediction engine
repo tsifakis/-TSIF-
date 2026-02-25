@@ -1,0 +1,495 @@
+import numpy as np
+import pandas as pd
+
+series = [6, 2, 3, 5, 4, 5, 8, 7, 7, 2, 10, 4, 9, 2, 7, 9, 7,
+10, 10, 8, 8, 4, 10, 5, 3, 5, 9, 4, 1, 5, 3, 10, 1, 1, 9, 7, 
+3, 3, 7, 10, 6, 1, 4, 1, 1, 8, 4, 8, 8, 5, 6, 3, 8, 6, 1, 10, ]
+
+TSIF_BAND = 1
+TSIF_MIN = 5
+MAX_TSIF = 9
+
+BLOCK12 = 12
+
+RULE3_ON = True
+RULE3_POINTS = [1, 1, 1, 1, 1]
+
+RULE4_ON = True
+RULE4_POINTS = [1, 1, 1, 1, 1]
+
+RULE5_ON = True
+RULE5_POINTS = [1, 1, 1, 1, 1]
+
+RULE6_ON = True
+RULE6_POINTS = [1, 1, 1, 1, 1]
+
+RULE7_ON = True
+RULE7_PENALTY = 1
+RULE7_DOUBLE_MULT = 2
+
+def tsifakis_welcome(x) -> int:
+    if x is None:
+        return 0
+    try:
+        if isinstance(x, float) and (np.isnan(x) or np.isinf(x)):
+            return 0
+        return int(np.rint(x))
+    except Exception:
+        return 0
+
+def tsifakis_centered(df: pd.DataFrame) -> str:
+    df_str = df.copy()
+    df_str = df_str.apply(lambda col: col.map(lambda x: "" if x is None else str(x)))
+    idx_name = "" if df_str.index.name is None else str(df_str.index.name)
+    idx_vals = ["" if x is None else str(x) for x in df_str.index.tolist()]
+    idx_w = max([len(idx_name)] + [len(s) for s in idx_vals]) if idx_vals else len(idx_name)
+    col_ws = {}
+    for col in df_str.columns:
+        col_s = str(col)
+        cells = df_str[col].tolist()
+        col_ws[col] = max([len(col_s)] + [len(v) for v in cells]) if cells else len(col_s)
+    parts = [idx_name.center(idx_w)]
+    for col in df_str.columns:
+        parts.append(str(col).center(col_ws[col]))
+    lines = ["  ".join(parts)]
+    for i, idx in enumerate(idx_vals):
+        row_parts = [idx.center(idx_w)]
+        for col in df_str.columns:
+            row_parts.append(df_str.iloc[i][col].center(col_ws[col]))
+        lines.append("  ".join(row_parts))
+    return "\n".join(lines)
+
+def print_centered_tsif(df: pd.DataFrame):
+    print(tsifakis_centered(df))
+
+def tsifakis_gap(gaps: np.ndarray):
+    if gaps.size == 0:
+        return 0, 0, "0 (0)", []
+    uniq, cnt = np.unique(gaps.astype(int), return_counts=True)
+    mx = int(cnt.max())
+    candidates = uniq[cnt == mx].astype(int)
+    tsif_gap = int(candidates.min())
+    if candidates.size == 1:
+        mf_str = f"{mx} ({tsif_gap})"
+    else:
+        mf_str = f"{mx} ({','.join(map(str, candidates.tolist()))})"
+    return tsif_gap, mx, mf_str, candidates.tolist()
+
+def tsifakis_rule_1(steps: int):
+    if steps == 0:
+        return (0, 0)
+    if steps == -1:
+        return (1, 0)
+    if -9 <= steps <= -2:
+        return (2, -steps)
+    if steps == 1:
+        return (3, 0)
+    if 2 <= steps <= 9:
+        return (4, steps)
+    if -36 <= steps <= -10:
+        return (5, -steps)
+    return (6, abs(steps) * 2 + (0 if steps < 0 else 1))
+
+def tsif_rows(series_list):
+    n = len(series_list)
+    arr = np.array(series_list, dtype=int)
+    rows = []
+    for num in range(1, 11):
+        idx = np.flatnonzero(arr == num)
+        count = int(idx.size)
+        paron = int((n - 1 - int(idx[-1])) if count > 0 else n)
+        gaps = np.diff(idx).astype(int) if count >= 2 else np.array([], dtype=int)
+        mean_gap = tsifakis_welcome(float(gaps.mean())) if gaps.size else 0
+        median_gap = tsifakis_welcome(float(np.median(gaps))) if gaps.size else 0
+        tsif_gap, dom_freq, most_frequent_gap, mf_candidates = tsifakis_gap(gaps)
+        doubles = int(np.sum((arr[:-1] == num) & (arr[1:] == num)))
+        if mf_candidates:
+            target_candidates = [int(x) for x in mf_candidates]
+        else:
+            tg = int(tsif_gap if tsif_gap > 0 else mean_gap)
+            target_candidates = [tg] if tg > 0 else [0]
+        steps_candidates = [int(tg - paron) for tg in target_candidates]
+        best_step = min(steps_candidates, key=lambda s: tsifakis_rule_1(int(s)))
+        rows.append({
+            "num": int(num),
+            "count": int(count),
+            "Doubles": int(doubles),
+            "mean_gap": int(mean_gap),
+            "median_gap": int(median_gap),
+            "Most_frequent_gap": str(most_frequent_gap),
+            "stoxos": "|".join(map(str, target_candidates)),
+            "paron": int(paron),
+            "tsif_steps": "|".join(map(str, steps_candidates)),
+            "target_best": int(target_candidates[steps_candidates.index(best_step)]),
+            "steps_best": int(best_step),
+            "_mf_candidates": mf_candidates,
+            "_mf_freq": int(dom_freq),
+            "_tsif_gap_used": int(tsif_gap),})
+    return rows
+
+def sorted_by_tsif(df: pd.DataFrame, cols, ascending):
+    cols = list(cols)
+    ascending = list(ascending)
+    if "count" not in cols:
+        cols.append("count")
+        ascending.append(False)
+    return df.sort_values(cols, ascending=ascending)
+
+def print_tsif_stats(rows, n_total):
+    out_cols = ["count", "Doubles", "mean_gap", "median_gap", "Most_frequent_gap", "stoxos", "paron", "tsif_steps"]
+    df = pd.DataFrame(rows).copy()
+    buckets = df["steps_best"].apply(lambda s: tsifakis_rule_1(int(s)))
+    df["_bucket"] = buckets.apply(lambda x: x[0])
+    df["_local"] = buckets.apply(lambda x: x[1])
+    df = df.set_index("num")[out_cols + ["steps_best", "_bucket", "_local", "_tsif_gap_used"]]
+    df["_mf_gap_sort"] = df["_tsif_gap_used"].apply(lambda g: int(g) if int(g) > 0 else 10**9)
+    df = sorted_by_tsif(df, cols=["_bucket", "_local", "_mf_gap_sort"], ascending=[True, True, True])
+    df_print = df.drop(columns=["steps_best", "_bucket", "_local", "_tsif_gap_used", "_mf_gap_sort"])
+    df_print = df_print.rename(columns={
+        "count": "Πλήθος",
+        "Doubles": "Διπλά",
+        "mean_gap": "Μ.Ο. Κενού",
+        "median_gap": "Διάμεσος Κενού",
+        "Most_frequent_gap": "Συχνότερο Κενό",
+        "stoxos": "Στόχος",
+        "paron": "Παρόν",
+        "tsif_steps": "Βήματα TSIF",})
+    df_print.index.name = "αριθμός"
+    print("\n==================")
+    print("Ο ΠΙΝΑΚΑΣ ΤΟΥ TSIF")
+    print("==================")
+    print(f"Σύνολο δεδομένων: {int(n_total)}\n")
+    print_centered_tsif(df_print)
+
+def tsifakis_rule_points(nums, points):
+    d = {}
+    if not nums:
+        return d
+    pts = list(points) if points is not None else []
+    m = min(len(nums), len(pts))
+    for i in range(m):
+        num = int(nums[i])
+        d[num] = int(d.get(num, 0)) + int(pts[i])
+    return d
+
+def predicted_by_tsif(series_list, rule6_on=False, rule6_points=(0, 1, 1, 1, 1),
+                      rule7_on=False, rule7_penalty=1, rule7_double_mult=2):
+    rows = tsif_rows(series_list)
+    df = pd.DataFrame(rows).copy()
+    buckets = df["steps_best"].apply(lambda s: tsifakis_rule_1(int(s)))
+    df["_bucket"] = buckets.apply(lambda x: x[0])
+    df["_local"] = buckets.apply(lambda x: x[1])
+    df_all = df.set_index("num")
+    df_rank = df_all[["count", "_bucket", "_local"]].copy()
+    df_rank["_pen7"] = 0
+    if rule7_on and len(series_list) >= 1:
+        last_num = int(series_list[-1])
+        is_double = (len(series_list) >= 2 and int(series_list[-2]) == last_num)
+        pen = int(rule7_penalty) * (int(rule7_double_mult) if is_double else 1)
+        if last_num in df_rank.index and pen > 0:
+            df_rank.loc[last_num, "_pen7"] = int(pen)
+    df_rank["_rew6"] = 0
+    if rule6_on and len(series_list) >= 1:
+        r6_map = tsifakis_rule_6_points(series_list, rule6_points, base_k=5)
+        for num, add in r6_map.items():
+            if int(num) in df_rank.index and int(add) != 0:
+                df_rank.loc[int(num), "_rew6"] += int(add)
+    df_rank["_mf_gap_sort"] = df_all["_tsif_gap_used"].apply(lambda g: int(g) if int(g) > 0 else 10**9)
+    df_rank = df_rank.sort_values(
+        by=["_pen7", "_rew6", "_bucket", "_local", "_mf_gap_sort", "count"],
+        ascending=[True, False, True, True, True, False],)
+    ranked = df_rank.index.to_list()
+    return ranked, df_all
+
+def tsifakis_rule_2(ranked, df_all, mf_min=3, max_abs=30, TSIF_BAND=0):
+    TSIF_BAND = int(TSIF_BAND)
+    due_list = [int(num) for num in ranked if abs(int(df_all.loc[int(num), "steps_best"])) <= TSIF_BAND]
+    if not due_list:
+        return False, due_list, 0, 0
+    strength = int(max(int(df_all.loc[int(num), "_mf_freq"]) for num in due_list))
+    max_abs_due = int(max(abs(int(df_all.loc[int(num), "steps_best"])) for num in due_list))
+    play = (strength >= int(mf_min)) and (max_abs_due <= int(max_abs))
+    return bool(play), due_list, strength, max_abs_due
+
+def tsifakis_rule_3(series_list, df_all=None, topk=5):
+    arr = np.array(series_list, dtype=int)
+    if arr.size < 2:
+        return [], 0
+    last_num = int(arr[-1])
+    nxt = arr[1:][arr[:-1] == last_num]
+    if nxt.size == 0:
+        return [], 0
+    counts = np.bincount(nxt, minlength=11)
+    total = int(counts.sum())
+    pairs = []
+    for num in range(1, 11):
+        c = int(counts[num])
+        if c <= 0:
+            continue
+        if df_all is not None and num in df_all.index:
+            bucket, local = tsifakis_rule_1(int(df_all.loc[num, "steps_best"]))
+        else:
+            bucket, local = (0, 0)
+        pairs.append((num, c, bucket, local))
+    pairs.sort(key=lambda x: (-x[1], x[2], x[3], x[0]))
+    top = [num for num, *_ in pairs[:int(topk)]]
+    return top, total
+
+def tsifakis_rule_4(series_list, df_all=None, topk=5):
+    arr = np.array(series_list, dtype=int)
+    n = int(arr.size)
+    if n < 3:
+        return [], 0, None
+    a = int(arr[-2])
+    b = int(arr[-1])
+    nxt = []
+    for i in range(n - 2):
+        if int(arr[i]) == a and int(arr[i + 1]) == b:
+            nxt.append(int(arr[i + 2]))
+    if not nxt:
+        return [], 0, (a, b)
+    counts = np.bincount(np.array(nxt, dtype=int), minlength=11)
+    total = int(counts.sum())
+    pairs = []
+    for num in range(1, 11):
+        c = int(counts[num])
+        if c <= 0:
+            continue
+        if df_all is not None and num in df_all.index:
+            bucket, local = tsifakis_rule_1(int(df_all.loc[num, "steps_best"]))
+        else:
+            bucket, local = (0, 0)
+        pairs.append((num, c, bucket, local))
+    pairs.sort(key=lambda x: (-x[1], x[2], x[3], x[0]))
+    top = [num for num, *_ in pairs[:int(topk)]]
+    return top, total, (a, b)
+
+def tsifakis_rule_5(series_list, block=12, topk=7):
+    arr = np.array(series_list, dtype=int)
+    n = int(arr.size)
+    block = int(block)
+    if n < block:
+        return [], pd.DataFrame()
+    m = n // block
+    firsts = []
+    first_pos = []
+    for i in range(m):
+        pos = i * block
+        firsts.append(int(arr[pos]))
+        first_pos.append(int(pos))
+    firsts_arr = np.array(firsts, dtype=int)
+    cnt = np.bincount(firsts_arr, minlength=11)
+    rec = {num: -10**9 for num in range(1, 11)}
+    for num, pos in zip(firsts, first_pos):
+        rec[int(num)] = max(rec[int(num)], int(pos))
+    rows = []
+    for num in range(1, 11):
+        freq = int(cnt[num])
+        if freq == 0:
+            continue
+        rows.append({"num": int(num), "freq_firstBlock": int(freq), "last_pos_firstBlock": int(rec[num])})
+    if not rows:
+        return [], pd.DataFrame()
+    df = pd.DataFrame(rows).sort_values(
+        by=["last_pos_firstBlock", "freq_firstBlock", "num"],
+        ascending=[False, False, True]
+    ).reset_index(drop=True)
+    top = df["num"].astype(int).head(int(topk)).to_list()
+    return top, df
+
+def tsifakis_rule_6_points(series_list, points, base_k=5):
+    d = {}
+    if not series_list:
+        return d
+    pts = list(points) if points is not None else []
+    n = len(series_list)
+    k = min(int(base_k), n, len(pts))
+    last_nums = [int(series_list[-1 - i]) for i in range(k)]
+    pts_k = [int(pts[i]) for i in range(k)]
+    seen = set(last_nums)
+    first_pos = {}
+    for i, num in enumerate(last_nums):
+        if num not in first_pos:
+            first_pos[num] = i
+    spills = []
+    for i, num in enumerate(last_nums):
+        add = int(pts_k[i])
+        if add == 0:
+            continue
+        if first_pos[num] == i:
+            d[num] = d.get(num, 0) + add
+        else:
+            spills.append((add, k))
+    spill_ptr = k
+    for amount, start_off in spills:
+        spill_ptr = max(spill_ptr, start_off)
+        placed = False
+        while spill_ptr < n:
+            candidate = int(series_list[-1 - spill_ptr])
+            if candidate not in seen:
+                d[candidate] = d.get(candidate, 0) + int(amount)
+                seen.add(candidate)
+                placed = True
+                spill_ptr += 1
+                break
+            spill_ptr += 1
+        if not placed:
+            pass
+    return d
+
+def tsifakis_rule_6_final_list(series_list, points, base_k=5):
+    if not series_list:
+        return []
+    pts = list(points) if points is not None else []
+    n = len(series_list)
+    k = min(int(base_k), n, len(pts))
+    last_nums = [int(series_list[-1 - i]) for i in range(k)]
+    last_pts = [int(pts[i]) for i in range(k)]
+    final = []
+    seen = set()
+    spill_amounts = []
+    for num, pt in zip(last_nums, last_pts):
+        if num not in seen:
+            final.append((pt, num))
+            seen.add(num)
+        else:
+            if pt != 0:
+                spill_amounts.append(pt)
+    ptr = k
+    for amt in spill_amounts:
+        while ptr < n:
+            cand = int(series_list[-1 - ptr])
+            ptr += 1
+            if cand not in seen:
+                final.append((int(amt), cand))
+                seen.add(cand)
+                break
+    return final[:k]
+
+def tsifakis_rule_7_penalty(series_list, penalty=1, double_mult=2):
+    d = {}
+    if not series_list:
+        return d
+    last_num = int(series_list[-1])
+    is_double = (len(series_list) >= 2 and int(series_list[-2]) == last_num)
+    pen = int(penalty) * (int(double_mult) if is_double else 1)
+    if pen > 0:
+        d[last_num] = -int(pen)
+    return d
+
+def tsifakis_rule_8(series_list, block12=12):
+    ranked, df_all = predicted_by_tsif(series_list, rule6_on=False, rule7_on=False)
+    base7 = [int(x) for x in ranked[:7]]
+    base_pos = {int(num): i for i, num in enumerate(base7)}
+    top5_r3, _ = tsifakis_rule_3(series_list, df_all=df_all, topk=5)
+    top5_r4, _, _ = tsifakis_rule_4(series_list, df_all=df_all, topk=5)
+    top5_r5, _ = tsifakis_rule_5(series_list, block=int(block12), topk=5)
+    r3_map = tsifakis_rule_points(top5_r3, RULE3_POINTS) if RULE3_ON else {}
+    r4_map = tsifakis_rule_points(top5_r4, RULE4_POINTS) if RULE4_ON else {}
+    r5_map = tsifakis_rule_points(top5_r5, RULE5_POINTS) if RULE5_ON else {}
+    r6_map = tsifakis_rule_6_points(series_list, RULE6_POINTS, base_k=5) if RULE6_ON else {}
+    r7_map = tsifakis_rule_7_penalty(series_list, RULE7_PENALTY, RULE7_DOUBLE_MULT) if RULE7_ON else {}
+    rows = []
+    for num in base7:
+        p3 = int(r3_map.get(num, 0))
+        p4 = int(r4_map.get(num, 0))
+        p5 = int(r5_map.get(num, 0))
+        p6 = int(r6_map.get(num, 0))
+        p7 = int(r7_map.get(num, 0))
+        total = int(p3 + p4 + p5 + p6 + p7)
+        rows.append({
+            "num": int(num),
+            "base_pos": int(base_pos[num]),
+            "p3": p3, "p4": p4, "p5": p5, "p6": p6, "p7": p7,
+            "score": total})
+    df = pd.DataFrame(rows).sort_values(by=["score", "base_pos"], ascending=[False, True]).reset_index(drop=True)
+    top3 = df["num"].head(3).astype(int).tolist()
+    top2 = df["num"].head(2).astype(int).tolist()
+    top1 = df["num"].head(1).astype(int).tolist()
+    return top1, top2, top3, base7
+
+def print_tsifakis_rules_all(series_list, block12=12, TSIF_BAND=0, TSIF_MIN=3, MAX_TSIF=30):
+    ranked, df_all = predicted_by_tsif(series_list, rule6_on=False, rule7_on=False)
+    top7_r2 = [int(x) for x in ranked[:7]]
+    play, due_list, strength, max_abs_due = tsifakis_rule_2(
+        ranked, df_all, mf_min=int(TSIF_MIN), max_abs=int(MAX_TSIF), TSIF_BAND=int(TSIF_BAND))
+    top5_r3, _ = tsifakis_rule_3(series_list, df_all=df_all, topk=5)
+    top5_r4, _, _ = tsifakis_rule_4(series_list, df_all=df_all, topk=5)
+    top5_r5, _ = tsifakis_rule_5(series_list, block=int(block12), topk=5)
+    if RULE6_ON and series_list:
+        final_pairs = tsifakis_rule_6_final_list(series_list, RULE6_POINTS, base_k=5)
+        rule6_str = "[" + ", ".join(f"{pt}({num})" for pt, num in final_pairs) + "]"
+    else:
+        rule6_str = "OFF"
+    if RULE7_ON and series_list:
+        last_num = int(series_list[-1])
+        is_double = (len(series_list) >= 2 and int(series_list[-2]) == last_num)
+        pen = -abs(int(RULE7_PENALTY) * (int(RULE7_DOUBLE_MULT) if is_double else 1))
+        rule7_str = f"Τελευταίος={last_num}   Διπλος ή Οχι={int(is_double)}   Ποινή={pen}"
+    else:
+        rule7_str = "OFF"
+    top1_r8, top2_r8, top3_r8, _ = tsifakis_rule_8(series_list, block12=block12)
+    print("\n" + "=" * 15)
+    print("TSIFAKIS RULES")
+    print("=" * 15)
+    print(f"TSIF rule 1: {top7_r2}")
+    print()
+    color = "\033[92m" if int(play) == 1 else "\033[91m"
+    print(f"Πρέπει να παίξω? Ναι(1) ή Όχι(0)= {color}{int(play)}\033[0m ")
+    print()
+    print(f"TSIF rule 3: {top5_r3}")
+    print(f"TSIF rule 4: {top5_r4}")
+    print(f"TSIF rule 5: {top5_r5}")
+    print(f"TSIF rule 6: {rule6_str}")
+    print(f"TSIF rule 7: {rule7_str}\n")
+    print("TSIF rule 8 Top-3: [" + ", ".join(f"\033[95m{n}\033[0m" for n in top3_r8) + "]")
+    print("TSIF rule 8 Top-2:  [" + ", ".join(f"\033[94m{n}\033[0m" for n in top2_r8) + "]")
+    green = "\033[92m"
+    reset = "\033[0m"
+    top1_disp = f"{green}{top1_r8[0]}{reset}" if top1_r8 else ""
+    print(f"TSIF rule 8 Top-1:    [{top1_disp}]")
+
+def tsifakis_rule_8_debug(series_list, block12=12):
+    ranked, df_all = predicted_by_tsif(series_list, rule6_on=False, rule7_on=False)
+    base7 = [int(x) for x in ranked[:7]]
+    base_pos = {int(num): i for i, num in enumerate(base7)}
+    top5_r3, _ = tsifakis_rule_3(series_list, df_all=df_all, topk=5)
+    top5_r4, _, _ = tsifakis_rule_4(series_list, df_all=df_all, topk=5)
+    top5_r5, _ = tsifakis_rule_5(series_list, block=int(block12), topk=5)
+    r3_map = tsifakis_rule_points(top5_r3, RULE3_POINTS) if RULE3_ON else {}
+    r4_map = tsifakis_rule_points(top5_r4, RULE4_POINTS) if RULE4_ON else {}
+    r5_map = tsifakis_rule_points(top5_r5, RULE5_POINTS) if RULE5_ON else {}
+    r6_map = tsifakis_rule_6_points(series_list, RULE6_POINTS, base_k=5) if RULE6_ON else {}
+    r7_map = tsifakis_rule_7_penalty(series_list, RULE7_PENALTY, RULE7_DOUBLE_MULT) if RULE7_ON else {}
+    rows = []
+    for num in base7:
+        p3 = int(r3_map.get(num, 0))
+        p4 = int(r4_map.get(num, 0))
+        p5 = int(r5_map.get(num, 0))
+        p6 = int(r6_map.get(num, 0))
+        p7 = int(r7_map.get(num, 0))
+        total = int(p3 + p4 + p5 + p6 + p7)
+        rows.append({
+            "num": int(num),
+            "base_pos": int(base_pos[num]),
+            "p3": p3, "p4": p4, "p5": p5, "p6": p6, "p7": p7,
+            "score": total })
+    df_scores = pd.DataFrame(rows).sort_values(
+        by=["score", "base_pos"], ascending=[False, True]
+    ).reset_index(drop=True)
+    top3 = df_scores["num"].head(3).astype(int).tolist()
+    top2 = df_scores["num"].head(2).astype(int).tolist()
+    top1 = df_scores["num"].head(1).astype(int).tolist()
+    return top1, top2, top3, base7, df_scores
+
+if __name__ == "__main__":
+    rows = tsif_rows(series)
+    print_tsif_stats(rows, n_total=len(series))
+    print_tsifakis_rules_all(
+        series,
+        block12=BLOCK12,
+        TSIF_BAND=TSIF_BAND,
+        TSIF_MIN=TSIF_MIN,
+        MAX_TSIF=MAX_TSIF )
+
+
